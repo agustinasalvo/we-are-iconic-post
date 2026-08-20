@@ -66,7 +66,10 @@
     border-radius: 14px;
     box-shadow: 0 30px 70px rgba(0,0,0,.55);
     background: var(--ink);
+    touch-action: none;
+    cursor: grab;
   }
+  canvas:active{ cursor: grabbing; }
 
   .panel{
     width:100%;
@@ -261,6 +264,7 @@
   </div>
 
   <canvas id="card" width="1080" height="1350"></canvas>
+  <p class="hint" style="margin-top:-14px;">Drag the photo to reposition it · use the slider to zoom</p>
 
   <div class="panel">
     <div class="toggle" id="modeToggle">
@@ -342,8 +346,15 @@ let state = {
   topic: 'Designing for Belonging',
   img: null,
   photoZoom: 1,
-  textScale: 1
+  textScale: 1,
+  photoOffsetX: 0,
+  photoOffsetY: 0
 };
+
+// current photo frame bounds + max pan offset, updated on every draw,
+// used both for rendering and for hit-testing drag gestures
+let frame = { x:0, y:0, w:0, h:0 };
+let maxOffset = { x:0, y:0 };
 
 let fontsReady = false;
 document.fonts.load('600 60px Fraunces').then(() => document.fonts.load('400 20px Inter')).then(() => {
@@ -381,36 +392,11 @@ function drawBackground(){
     ctx.fillRect(0,0,W,H);
   }
 
-  if (state.img){
-    // full-bleed photo, cover-fit, with user-controlled zoom
-    const iw = state.img.width, ih = state.img.height;
-    const scale = Math.max(W/iw, H/ih) * state.photoZoom;
-    const w = iw*scale, h = ih*scale;
-    ctx.drawImage(state.img, (W-w)/2, (H-h)/2, w, h);
-
-    // dark gradient at top for text legibility
-    const topG = ctx.createLinearGradient(0,0,0,H*0.62);
-    topG.addColorStop(0, hexA(COLORS.ink, 0.88));
-    topG.addColorStop(0.55, hexA(COLORS.ink, 0.38));
-    topG.addColorStop(1, hexA(COLORS.ink, 0));
-    ctx.fillStyle = topG;
-    ctx.fillRect(0,0,W,H*0.62);
-
-    // dark gradient at bottom for the name badge
-    const botG = ctx.createLinearGradient(0,H*0.62,0,H);
-    botG.addColorStop(0, hexA(COLORS.ink, 0));
-    botG.addColorStop(0.55, hexA(COLORS.ink, 0.55));
-    botG.addColorStop(1, hexA(COLORS.ink, 0.92));
-    ctx.fillStyle = botG;
-    ctx.fillRect(0,H*0.62,W,H*0.38);
-  } else {
-    // fallback identity wash before a photo is chosen
-    wash(140, 160, 680, COLORS.coral, 0.20);
-    wash(W-100, 280, 600, COLORS.violet, 0.16);
-    wash(W/2, H*0.5, 760, COLORS.gold, 0.12);
-    wash(100, H-160, 560, COLORS.emerald, 0.12);
-    wash(W-60, H-100, 520, COLORS.turquoise, 0.12);
-  }
+  wash(140, 160, 680, COLORS.coral, 0.16);
+  wash(W-100, 280, 600, COLORS.violet, 0.13);
+  wash(W/2, H*0.5, 760, COLORS.gold, 0.09);
+  wash(100, H-160, 560, COLORS.emerald, 0.10);
+  wash(W-60, H-100, 520, COLORS.turquoise, 0.10);
 }
 
 function hexA(hex, alpha){
@@ -470,7 +456,7 @@ function drawTopContent(){
   y += fs(52);
   leftSpacedText('SEPT 24–26', leftX, y, fs(18), `600 ${fs(18)}px Inter`, COLORS.gold, 0.22);
 
-  return y + fs(40);
+  return y + fs(30);
 }
 
 function leftSpacedText(text, x, y, size, font, color, spacing){
@@ -525,12 +511,68 @@ function roundRect(x,y,w,h,r){
   ctx.closePath();
 }
 
-function drawNameBadge(){
+function drawPhotoFrame(topY){
+  const fx = 80;
+  const fw = W - 160;
+  const fh = 520;
+  const fy = topY;
+  const radius = 26;
+  frame = { x: fx, y: fy, w: fw, h: fh };
+
+  // decorative gradient border, echoing the identity palette
+  roundRect(fx-6, fy-6, fw+12, fh+12, radius+6);
+  const borderGrad = ctx.createLinearGradient(fx, fy, fx+fw, fy+fh);
+  borderGrad.addColorStop(0, COLORS.coral);
+  borderGrad.addColorStop(0.5, COLORS.gold);
+  borderGrad.addColorStop(1, COLORS.violet);
+  ctx.strokeStyle = borderGrad;
+  ctx.lineWidth = 4;
+  ctx.stroke();
+
+  ctx.save();
+  roundRect(fx, fy, fw, fh, radius);
+  ctx.clip();
+
+  if (state.img){
+    const iw = state.img.width, ih = state.img.height;
+    const scale = Math.max(fw/iw, fh/ih) * state.photoZoom;
+    const w = iw*scale, h = ih*scale;
+
+    maxOffset = { x: Math.max(0,(w-fw)/2), y: Math.max(0,(h-fh)/2) };
+    state.photoOffsetX = clamp(state.photoOffsetX, -maxOffset.x, maxOffset.x);
+    state.photoOffsetY = clamp(state.photoOffsetY, -maxOffset.y, maxOffset.y);
+
+    const baseX = fx + fw/2 - w/2 + state.photoOffsetX;
+    const baseY = fy + fh/2 - h/2 + state.photoOffsetY;
+    ctx.drawImage(state.img, baseX, baseY, w, h);
+  } else {
+    maxOffset = { x:0, y:0 };
+    const g = ctx.createLinearGradient(fx, fy, fx+fw, fy+fh);
+    g.addColorStop(0, hexA(COLORS.coral, 0.28));
+    g.addColorStop(0.5, hexA(COLORS.gold, 0.22));
+    g.addColorStop(1, hexA(COLORS.violet, 0.28));
+    ctx.fillStyle = g;
+    ctx.fillRect(fx, fy, fw, fh);
+
+    ctx.fillStyle = COLORS.limestone;
+    ctx.textAlign = 'center';
+    ctx.font = `500 ${Math.round(28*state.textScale)}px Inter`;
+    ctx.fillText('Add your photo below', fx+fw/2, fy+fh/2);
+    ctx.textAlign = 'left';
+  }
+
+  ctx.restore();
+  return fy + fh;
+}
+
+function clamp(v, min, max){ return Math.min(max, Math.max(min, v)); }
+
+function drawNameBadge(topY){
   const leftX = 80;
   const maxW = W - leftX*2;
   const ts = state.textScale;
   const fs = (n) => Math.round(n*ts);
-  let y = H - fs(210);
+  let y = topY + fs(70);
 
   // name
   ctx.textAlign = 'left';
@@ -569,8 +611,9 @@ function drawNameBadge(){
 function draw(){
   if (!fontsReady) return;
   drawBackground();
-  drawTopContent();
-  drawNameBadge();
+  const afterTop = drawTopContent();
+  const afterFrame = drawPhotoFrame(afterTop);
+  drawNameBadge(afterFrame);
 }
 
 // --- wire up controls ---
@@ -605,6 +648,45 @@ document.getElementById('textScaleInput').addEventListener('input', (e) => {
   state.textScale = e.target.value / 100; draw();
 });
 
+// --- drag to reposition the photo within its frame ---
+function toCanvasPoint(e){
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
+}
+function pointInFrame(pt){
+  return pt.x >= frame.x && pt.x <= frame.x + frame.w && pt.y >= frame.y && pt.y <= frame.y + frame.h;
+}
+
+let dragging = false;
+let dragStart = null;
+let dragOrigin = null;
+
+canvas.addEventListener('pointerdown', (e) => {
+  if (!state.img) return;
+  const pt = toCanvasPoint(e);
+  if (pointInFrame(pt)){
+    dragging = true;
+    dragStart = pt;
+    dragOrigin = { x: state.photoOffsetX, y: state.photoOffsetY };
+    canvas.setPointerCapture(e.pointerId);
+  }
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const pt = toCanvasPoint(e);
+  const dx = pt.x - dragStart.x;
+  const dy = pt.y - dragStart.y;
+  state.photoOffsetX = clamp(dragOrigin.x + dx, -maxOffset.x, maxOffset.x);
+  state.photoOffsetY = clamp(dragOrigin.y + dy, -maxOffset.y, maxOffset.y);
+  draw();
+});
+function endDrag(){ dragging = false; }
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+canvas.addEventListener('pointerleave', endDrag);
+
 const photoInput = document.getElementById('photoInput');
 const photoName = document.getElementById('photoName');
 photoInput.addEventListener('change', (e) => {
@@ -614,7 +696,12 @@ photoInput.addEventListener('change', (e) => {
   const reader = new FileReader();
   reader.onload = (ev) => {
     const img = new Image();
-    img.onload = () => { state.img = img; draw(); };
+    img.onload = () => {
+      state.img = img;
+      state.photoOffsetX = 0;
+      state.photoOffsetY = 0;
+      draw();
+    };
     img.src = ev.target.result;
   };
   reader.readAsDataURL(file);
